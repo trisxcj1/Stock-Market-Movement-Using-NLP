@@ -27,7 +27,9 @@ library(quantmod)
 getArticles function
 ```{r}
 
-# This function takes the company name (or name as will be presented on MarketWatch), finds the page with the articles regarding that company, collects the articles, and returns a dataframe with url, datetime, article title and artile body. 
+# This function takes the company name (or name as will be presented on MarketWatch)
+# finds the page with the articles regarding that company, collects the articles
+# and returns a dataframe with url, datetime, article title and artile body. 
 
 getArticles <- function(company_name){
   # Link concatenates the company name (or name as presented on MarketWatch) with the remainder of the url
@@ -75,10 +77,13 @@ getArticles <- function(company_name){
   articles_webpgs$Body <- bodies 
   return(articles_webpgs)
 
-} # Needs updating. There is a mismatch between the number of rows in datetime and url. This was not always an error so maybe it is an update on marketwatch?
+} 
+# Needs updating. There is a mismatch between the number of rows in datetime and url. 
+# This was not always an error so maybe it is an update on marketwatch?
 
-# The function also does not collect all articles, maybe it is an error on the page being used at marketwatch. Try collecting articles from a different page. Also, look at the Github that MGallo shared. 
-#try_this <- getArticles("apple") 
+# The function also does not collect all articles
+# maybe it is an error on the page being used at marketwatch. 
+# Try collecting articles from a different page. Also, look at the Github that MGallo shared. 
 
 ```
 
@@ -103,12 +108,24 @@ apple_news$Url <- as.character(apple_news$Url)
 
 # Article cleaning 
 apple_news_polarity <- apple_news
-apple_news_polarity$Article <- tolower(apple_news_polarity$Article) # convert all text to lowercase 
-apple_news_polarity$Article <- removePunctuation(apple_news_polarity$Article) # removes the punctuation within all text 
-apple_news_polarity$Article <- removeSymbols(apple_news_polarity$Article) # removes symbols such as '?', '%' and more
-apple_news_polarity$Article <- removeNumbers(apple_news_polarity$Article) # removes number from all text 
-apple_news_polarity$Article <- removeWords(apple_news_polarity$Article, words = c(stopwords(kind = "en"), "marketwatch", "mw", "zachs", "zacks")) # removes filler words 
-apple_news_polarity$Article <- stripWhitespace(apple_news_polarity$Article) # removes the whitespace within all text 
+
+# convert all text to lowercase
+apple_news_polarity$Article <- tolower(apple_news_polarity$Article)  
+
+# removes the punctuation within all text
+apple_news_polarity$Article <- removePunctuation(apple_news_polarity$Article) 
+
+# removes symbols such as '?', '%' and more
+apple_news_polarity$Article <- removeSymbols(apple_news_polarity$Article) 
+
+# removes number from all text
+apple_news_polarity$Article <- removeNumbers(apple_news_polarity$Article)  
+
+# removes filler words
+apple_news_polarity$Article <- removeWords(apple_news_polarity$Article, words = c(stopwords(kind = "en"), "marketwatch", "mw", "zachs", "zacks"))  
+
+# removes the whitespace within all text
+apple_news_polarity$Article <- stripWhitespace(apple_news_polarity$Article)  
 
 # Calculating the polairty of each article 
 apple_clean_polarity <- polarity(apple_news_polarity$Article)
@@ -149,7 +166,10 @@ apple_regression_set$Month <- factor(months(apple_regression_set$Date), levels =
 
 First price function (both negative and positive sentiments have the same weight)
 ```{r}
-# This function takes an initial price, along with a vector of sentiments (where the first sentiment is the initial input sentiment), and predicts future prices using the recursive relationship. The number of prices predicted is dependent on the length of the sentiment vector. 
+# This function takes an initial price, along with a vector of sentiments 
+# (where the first sentiment is the initial input sentiment)
+# and predicts future prices using the recursive relationship
+# The number of prices predicted is dependent on the length of the sentiment vector
 
 # Function is optimized using intermediate value theorem and the evaluation metric
 
@@ -191,7 +211,10 @@ Polarity_sign_count_after_march <- apple_regression_set%>%
 Second price function (different weights)
 ```{r}
 
-# This function takes an initial price, along with a vector of sentiments (where the first sentiment is the initial input sentiment), and predicts future prices using the recursive relationship. The number of prices predicted is dependent on the length of the sentiment vector. 
+# This function takes an initial price, along with a vector of sentiments 
+# (where the first sentiment is the initial input sentiment)
+# and predicts future prices using the recursive relationship
+# The number of prices predicted is dependent on the length of the sentiment vector
 
 # Function is optimized using intermediate value theorem and the evaluation metric
 
@@ -239,7 +262,10 @@ model_2_difference_by_month <- apple_regression_set%>%
 Pricing using volume & sentiment
 ```{r}
 
-# This function takes an initial price, h a vector of sentiments (where the first sentiment is the initial input sentiment), & a vector of volumes (where the first volume is the initial input volume), and predicts future prices using the recursive relationship. The number of prices predicted is dependent on the length of the sentiment vector. 
+# This function takes an initial price, a vector of sentiments (where the first sentiment is the initial input sentiment)
+# & a vector of volumes (where the first volume is the initial input volume)
+# predicts future prices using the recursive relationship
+# The number of prices predicted is dependent on the length of the sentiment vector
 
 # Function is optimized using intermediate value theorem and the evaluation metric
 
