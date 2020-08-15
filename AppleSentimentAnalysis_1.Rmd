@@ -1,51 +1,62 @@
 ---
-title: "MarketWatch Scraping & Model"
-author: "Trist'n Joseph"
-date: "6/21/2020"
-output: html_document
+author: "Trist'n Joseph (trisxcjoseph@gmail.com)"
 ---
 
 Packages
 ```{r}
 
-library(rvest)
-library(stringr)
+library(rvest) # Package to assit with article collection from MarketWatch.com
+
+# Packages to assit with article cleaning and text formatting 
+library(stringr) 
+library(tidytext)
 library(tm)
+
+# Packages to calculate the polarity of articles
 library(rJava)
 library(qdap)
-library(tidytext)
+
+# Package to assist with data wrangling, manipulation, and graphing 
 library(tidyverse)
+
+# Package to collect financial data
 library(quantmod)
-
-
 
 ```
 
 getArticles function
 ```{r}
 
-#This function takes the company name (or name as will be presented on marketwatch), finds the page with the articles regarding that company, collects the articles, and returns a dataframe with url, datetime, article title and artile body. 
+# This function takes the company name (or name as will be presented on MarketWatch), finds the page with the articles regarding that company, collects the articles, and returns a dataframe with url, datetime, article title and artile body. 
 
 getArticles <- function(company_name){
-  link <- paste("https://www.marketwatch.com/search?q=", company_name, "&m=Keyword&rpp=15&mp=0&bd=false&rs=false", sep="")
+  # Link concatenates the company name (or name as presented on MarketWatch) with the remainder of the url
+  # to create the url for the page contatining all articles about that input company 
+  link <- paste("https://www.marketwatch.com/search?q=", company_name, "&m=Keyword&rpp=15&mp=0&bd=false&rs=false", sep="")   
+  
+  # Reads the link and finds the page 
   all_articles_page <- read_html(link)
   
+  # Collects the text from the page 
   datetime <- all_articles_page%>%
   html_nodes("div.deemphasized span")%>%
   html_text()
   
+  # Saves the url of each article 
   urls <- all_articles_page%>%
   html_nodes("div.searchresult a") %>%
   html_attr("href")
-  
+    
   articles_webpgs <- data.frame(WebPg = urls, datetime)
   articles_webpgs$WebPg <- as.character(articles_webpgs$WebPg)
-  keep <- str_starts(articles_webpgs$WebPg, "http")
+  keep <- str_starts(articles_webpgs$WebPg, "http") 
+  # For some reason, many urls on this page are inactive or broken & do not contain "http(s)"
   articles_webpgs <- articles_webpgs[keep, ]
   
   titles <- c()
   bodies <- c()
   
+  # Loops through each article, collects the title & body 
   for (i in articles_webpgs$WebPg){
     articles_webpgs1 <- read_html(i)
     title <- articles_webpgs1 %>%
@@ -64,92 +75,83 @@ getArticles <- function(company_name){
   articles_webpgs$Body <- bodies 
   return(articles_webpgs)
 
-} #Needs updating. There is a mismatch between the number of rows in datetime and url. This was not always an error so maybe it is an update on marketwatch?
+} # Needs updating. There is a mismatch between the number of rows in datetime and url. This was not always an error so maybe it is an update on marketwatch?
 
-#The function also does not collect all articles, maybe it is an error on the page being used at marketwatch. Try collecting articles from a different page. Also, look at the Github that MGallo shared. 
-
-
-#try<- getArticles("apple") 
+# The function also does not collect all articles, maybe it is an error on the page being used at marketwatch. Try collecting articles from a different page. Also, look at the Github that MGallo shared. 
+#try_this <- getArticles("apple") 
 
 ```
 
-Local dataset
+Data
 ```{r}
-#Apple (or stock) data set
+# Apple (or stock) data set
 startDate = as.Date("2020-02-10")
 endDate = as.Date("2020-06-13")
 getSymbols("AAPL", from =startDate, to = endDate)
+# Automatically saves as an xts object with the ticker symbol as the name 
 
-
-#Apple news data set 
+# Apple news data set 
+# Local data set 
 apple_news <- read.csv("E:/Projects/Sentiment Analysis/AppleNews.csv")
-apple_news$Date <- as.character(apple_news$Date)
+glimpse(apple_news)
+# Need to convert Date to a datetime object (instead of factor) and Url to character (instead of factor)
+
+apple_news$Date <- as.character(apple_news$Date) # need to convert to character first and then to datetime 
 apple_news$Date <- parse_date(apple_news$Date, format="%m/%d/%Y")
-apple_news$Article <- as.character(apple_news$Article)
+
 apple_news$Url <- as.character(apple_news$Url)
 
-
-
+# Article cleaning 
 apple_news_polarity <- apple_news
-apple_news_polarity$Article <- tolower(apple_news_polarity$Article)
-apple_news_polarity$Article <- removePunctuation(apple_news_polarity$Article)
-apple_news_polarity$Article <- removeWords(apple_news_polarity$Article, words = stopwords(kind = "en"))
-apple_news_polarity$Article <- stripWhitespace(apple_news_polarity$Article)
+apple_news_polarity$Article <- tolower(apple_news_polarity$Article) # convert all text to lowercase 
+apple_news_polarity$Article <- removePunctuation(apple_news_polarity$Article) # removes the punctuation within all text 
+apple_news_polarity$Article <- removeSymbols(apple_news_polarity$Article) # removes symbols such as '?', '%' and more
+apple_news_polarity$Article <- removeNumbers(apple_news_polarity$Article) # removes number from all text 
+apple_news_polarity$Article <- removeWords(apple_news_polarity$Article, words = c(stopwords(kind = "en"), "marketwatch", "mw", "zachs", "zacks")) # removes filler words 
+apple_news_polarity$Article <- stripWhitespace(apple_news_polarity$Article) # removes the whitespace within all text 
 
+# Calculating the polairty of each article 
 apple_clean_polarity <- polarity(apple_news_polarity$Article)
 apple_news_polarity$Polarity <- apple_clean_polarity$all$polarity
 
-
+# Finding the total polarity per day, since there can be multiple articles per day 
 daily_total_polarity <- apple_news_polarity%>%
   group_by(Date)%>%
   summarise(Total_Polarity = sum(Polarity))%>%
   arrange(Date)
+
+# Finding the average polarity per day, since there can be multiple articles per day 
 daily_average_polarity <- apple_news_polarity%>%
   group_by(Date)%>%
   summarise(Avg_Polarity = mean(Polarity))%>%
   arrange(Date)
 
-
+# Deleted non-trading days that were contained in the article data set 
 delete_dates_index <- c(6, 45, 76)
-
 daily_average_polarity <- daily_average_polarity[-delete_dates_index, ]
 daily_total_polarity <- daily_total_polarity[-delete_dates_index, ]
 
-
-daily_average_polarity$Avg_Polarity[25] <- mean(daily_average_polarity$Avg_Polarity[24], daily_average_polarity$Avg_Polarity[26])
-daily_average_polarity$Avg_Polarity[30] <- mean(daily_average_polarity$Avg_Polarity[29], daily_average_polarity$Avg_Polarity[31])
-daily_average_polarity$Avg_Polarity[55] <- mean(daily_average_polarity$Avg_Polarity[56], daily_average_polarity$Avg_Polarity[54])
-daily_average_polarity$Avg_Polarity[60] <- mean(daily_average_polarity$Avg_Polarity[61], daily_average_polarity$Avg_Polarity[59])
-daily_average_polarity$Avg_Polarity[76] <- mean(daily_average_polarity$Avg_Polarity[77], daily_average_polarity$Avg_Polarity[75])
-daily_average_polarity$Avg_Polarity[78] <- mean(daily_average_polarity$Avg_Polarity[77], daily_average_polarity$Avg_Polarity[79])
 anyNA(daily_average_polarity$Avg_Polarity)
-
-
-daily_total_polarity$Total_Polarity[25] <- mean(daily_total_polarity$Total_Polarity[24], daily_total_polarity$Total_Polarity[26])
-daily_total_polarity$Total_Polarity[30] <- mean(daily_total_polarity$Total_Polarity[29], daily_total_polarity$Total_Polarity[31])
-daily_total_polarity$Total_Polarity[55] <- mean(daily_total_polarity$Total_Polarity[54], daily_total_polarity$Total_Polarity[56])
-daily_total_polarity$Total_Polarity[60] <- mean(daily_total_polarity$Total_Polarity[59], daily_total_polarity$Total_Polarity[61])
-daily_total_polarity$Total_Polarity[76] <- mean(daily_total_polarity$Total_Polarity[75], daily_total_polarity$Total_Polarity[77])
-daily_total_polarity$Total_Polarity[78] <- mean(daily_total_polarity$Total_Polarity[77], daily_total_polarity$Total_Polarity[79])
 anyNA(daily_total_polarity$Total_Polarity)
 
-
+# Extract the daily closing price from the AAPL xts object 
 prices <- as.numeric(AAPL$AAPL.Close)
-apple_regression_set <- cbind(prices, daily_average_polarity$Avg_Polarity, daily_total_polarity$Total_Polarity)
-apple_regression_set <- as.data.frame(apple_regression_set)
+
+apple_regression_set <- as.data.frame(cbind(prices, daily_average_polarity$Avg_Polarity, daily_total_polarity$Total_Polarity))
 colnames(apple_regression_set) <- c("Price", "Avg_Polarity", "Total_Polarity")
 
 apple_regression_set$Date <- daily_average_polarity$Date
 apple_regression_set$Polarity_Sign <- as.factor(ifelse(apple_regression_set$Total_Polarity >= 0, "Positive","Negative"))
 apple_regression_set$Standardized_Price <- (apple_regression_set$Price - mean(apple_regression_set$Price))/sd(apple_regression_set$Price)
 apple_regression_set$Month <- factor(months(apple_regression_set$Date), levels = month.name)
-head(apple_regression_set)
 
 ```
 
 First price function (both negative and positive sentiments have the same weight)
 ```{r}
-#This function takes an initial price, along with a vector of sentiments (where the first sentiment is the initial input sentiment), and predicts future prices using the recursive relationship. The number of prices predicted is dependent on the length of the sentiment vector. 
+# This function takes an initial price, along with a vector of sentiments (where the first sentiment is the initial input sentiment), and predicts future prices using the recursive relationship. The number of prices predicted is dependent on the length of the sentiment vector. 
+
+# Function is optimized using intermediate value theorem and the evaluation metric
 
 predict_prices <- function(initial_price, initial_sentiment, sentiment_vector){
   stock_price <- c()
@@ -162,7 +164,7 @@ predict_prices <- function(initial_price, initial_sentiment, sentiment_vector){
   }
   final_stock_prices <- c(initial_price, stock_price)
   return(final_stock_prices)
-}#The function currently prints one more value than ideal
+}
 
 predicted_prices <- predict_prices(321.55, -0.762, apple_regression_set$Total_Polarity[2:87])
 apple_regression_set$Predicted_Price_m1 <- predicted_prices[1:87]
@@ -176,24 +178,22 @@ ggplot(apple_regression_set)+
   ylab("Stock Price")+
   ggtitle("Apple Stock Price")
 
-
-test <- apple_regression_set%>%
+Polarity_sign_count_after_march <- apple_regression_set%>%
   filter(Date >= "2020-04-1")%>%
   select(Polarity_Sign)%>%
   count(Polarity_Sign)
 
-test <- apple_regression_set%>%
-  #filter(Date >= "2020-04-1")%>%
-  select(Polarity_Sign)%>%
-  count(Polarity_Sign)
-
-#I should give negative and positive news different weightings 
+# Bad model performnace based on graph 
+# I should give negative and positive news different weightings 
 
 ```
 
-Second price function (different weigts)
+Second price function (different weights)
 ```{r}
-#This function takes an initial price, along with a vector of sentiments (where the first sentiment is the initial input sentiment), and predicts future prices using the recursive relationship. The number of prices predicted is dependent on the length of the sentiment vector. 
+
+# This function takes an initial price, along with a vector of sentiments (where the first sentiment is the initial input sentiment), and predicts future prices using the recursive relationship. The number of prices predicted is dependent on the length of the sentiment vector. 
+
+# Function is optimized using intermediate value theorem and the evaluation metric
 
 predict_prices1 <- function(initial_price, initial_sentiment, sentiment_vector){
   stock_price <- c()
@@ -215,29 +215,33 @@ predict_prices1 <- function(initial_price, initial_sentiment, sentiment_vector){
   }
   final_stock_prices <- c(initial_price, stock_price)
   return(final_stock_prices)
-} #this function adds a higher weight to positive news
+} 
 
 predicted_prices <- predict_prices1(321.55, -0.762, apple_regression_set$Total_Polarity[2:87])
 apple_regression_set$Predicted_Price_m2 <- predicted_prices[1:87]
 
-model2_difference <- apple_regression_set%>%
+# Evaluation metrics 
+model_2_difference <- apple_regression_set%>%
   select(c(Price, Predicted_Price_m2))%>%
+  # Calculates the mean deviation and the absolute mean deviation 
   mutate(Difference = Predicted_Price_m2 - Price, Absolute_Difference = abs(Price - Predicted_Price_m2))%>%
   summarize(Avg_Predicted_minus_Actual = mean(Difference), Avg_Absolute_Difference = mean(Absolute_Difference))
-model2_difference
 
-model2_difference_by_month <- apple_regression_set%>%
+# Evaluation metric broken down by month 
+model_2_difference_by_month <- apple_regression_set%>%
   select(c(Price, Predicted_Price_m2, Month))%>%
   mutate(Difference = Predicted_Price_m2 - Price, Absolute_Difference = abs(Price - Predicted_Price_m2))%>%
   group_by(Month)%>%
   summarise(Avg_Predicted_minus_Actual = mean(Difference), Avg_Absolute_Difference = mean(Absolute_Difference))
-model2_difference_by_month
 
 ```
 
 Pricing using volume & sentiment
 ```{r}
-#This function takes an initial price, h a vector of sentiments (where the first sentiment is the initial input sentiment), & a vector of volumes (where the first volume is the initial input volume), and predicts future prices using the recursive relationship. The number of prices predicted is dependent on the length of the sentiment vector. 
+
+# This function takes an initial price, h a vector of sentiments (where the first sentiment is the initial input sentiment), & a vector of volumes (where the first volume is the initial input volume), and predicts future prices using the recursive relationship. The number of prices predicted is dependent on the length of the sentiment vector. 
+
+# Function is optimized using intermediate value theorem and the evaluation metric
 
 predict_prices3 <- function(initial_price, initial_volume, initial_sentiment, volume_vector, sentiment_vector){
   stock_price <- c()
@@ -259,8 +263,9 @@ predict_prices3 <- function(initial_price, initial_volume, initial_sentiment, vo
   }
   final_stock_prices <- c(initial_price, stock_price)
   return(final_stock_prices)
-} #Multiplies sentiment with volume 
-#coef on volume < 0.00000003 & > 0.0000000028
+} 
+# Multiplies sentiment with volume 
+# Coef on volume < 0.00000003 & > 0.0000000028
 
 predicted_prices <- predict_prices3(initial_price = 321.55, initial_volume=27337200 , initial_sentiment = -0.762, volume_vector = apple_regression_set$Volume[2:87], sentiment_vector =  apple_regression_set$Total_Polarity[2:87])
 apple_regression_set$Predicted_Price_m4 <- predicted_prices[1:87]
@@ -274,18 +279,18 @@ ggplot(apple_regression_set)+
   ylab("Stock Price")+
   ggtitle("Apple Stock Price")
 
-model4_difference <- apple_regression_set%>%
+model_4_difference <- apple_regression_set%>%
   select(c(Price, Predicted_Price_m4))%>%
   mutate(Difference = Predicted_Price_m4 - Price, Absolute_Difference = abs(Price - Predicted_Price_m4))%>%
   summarize(Avg_Predicted_minus_Actual = mean(Difference), Avg_Absolute_Difference = mean(Absolute_Difference))
-model4_difference
 
-model4_difference_by_month <- apple_regression_set%>%
+# Lowest deviance caclculated when compared the the other models   
+
+model_4_difference_by_month <- apple_regression_set%>%
   select(c(Price, Predicted_Price_m4, Month))%>%
   mutate(Difference = Predicted_Price_m4 - Price, Absolute_Difference = abs(Price - Predicted_Price_m4))%>%
   group_by(Month)%>%
   summarize(Avg_Predicted_minus_Actual = mean(Difference), Avg_Absolute_Difference = mean(Absolute_Difference))
-model4_difference_by_month
 
 ```
 
