@@ -1,8 +1,5 @@
 ---
-title: "Exxon Marketwatch Analysis"
-author: "Trist'n Joseph"
-date: "7/25/2020"
-output: html_document
+author: "Trist'n Joseph (trisxcjoseph@gmail.com)"
 ---
 
 Packages
@@ -28,48 +25,70 @@ library(quantmod)
 
 ```
 
-IGNORE 
+getArticles Function
 ```{r}
-exxon_articles$Date <- as.character(exxon_articles$Date)
-exxon_articles$Date <- parse_date(exxon_articles$Date, format ="%m/%d/%Y")
-exxon_articles$Article <- as.character(exxon_articles$Article)
-
-head(exxon_articles)
-
-exxon_articles%>%
-  select(Date)%>%
-  arrange(Date)
-
-
-anyNA(exxon_articles$Article)
-sum(is.na(exxon_articles))
-exxon_articles$Article[c(6,144)]
-
-exxon_articles <- exxon_articles[-c(6,144), ]
-sum(is.na(exxon_articles))
-
-exxon_articles$Article[31]
-
-exxon_articles_cleaned <- ExxonArticle_2
-exxon_articles_cleaned$Article <- tolower(exxon_articles_cleaned$Article)
-exxon_articles_cleaned$Article <- removePunctuation(exxon_articles_cleaned$Article)
-exxon_articles_cleaned$Article <- removeSymbols(exxon_articles_cleaned$Article)
-exxon_articles_cleaned$Article <- removeWords(exxon_articles_cleaned$Article, words = c(stopwords(kind = "en"), "marketwatch", "mw", "zachs", "zacks"))
-exxon_articles_cleaned$Article <- stripWhitespace(exxon_articles_cleaned$Article)
-
+# This function takes the company name (or name as will be presented on MarketWatch)
+# finds the page with the articles regarding that company, collects the articles
+# and returns a dataframe with url, datetime, article title and artile body. 
+getArticles <- function(company_name){
+  # Link concatenates the company name (or name as presented on MarketWatch) with the remainder of the url
+  # to create the url for the page contatining all articles about that input company 
+  link <- paste("https://www.marketwatch.com/search?q=", company_name, "&m=Keyword&rpp=15&mp=0&bd=false&rs=false", sep="")   
+  
+  # Reads the link and finds the page 
+  all_articles_page <- read_html(link)
+  
+  # Collects the text from the page 
+  datetime <- all_articles_page%>%
+  html_nodes("div.deemphasized span")%>%
+  html_text()
+  
+  # Saves the url of each article 
+  urls <- all_articles_page%>%
+  html_nodes("div.searchresult a") %>%
+  html_attr("href")
+    
+  articles_webpgs <- data.frame(WebPg = urls, datetime)
+  articles_webpgs$WebPg <- as.character(articles_webpgs$WebPg)
+  keep <- str_starts(articles_webpgs$WebPg, "http") 
+  # For some reason, many urls on this page are inactive or broken & do not contain "http(s)"
+  articles_webpgs <- articles_webpgs[keep, ]
+  
+  titles <- c()
+  bodies <- c()
+  
+  # Loops through each article, collects the title & body 
+  for (i in articles_webpgs$WebPg){
+    articles_webpgs1 <- read_html(i)
+    title <- articles_webpgs1 %>%
+      html_node("title") %>%
+      html_text()
+    titles <- append(titles, title)
+    
+    articles_webpgs1 <- read_html(i)
+    body <- articles_webpgs1 %>%
+      html_nodes("p") %>%
+      html_text()
+    one_body <- paste(body, collapse = " ")
+    bodies <- append(bodies, one_body)
+  } 
+  articles_webpgs$Title <- titles
+  articles_webpgs$Body <- bodies 
+  return(articles_webpgs)
+} 
+# Needs updating.
 
 ```
 
 Exxon Article Data -- Local File
 ```{r}
-
 exxon_articles <- read_csv("E:/Projects/Sentiment Analysis/ExxonArticle_2.csv")
 
 # Removes unnecessary columns from the working df
 exxon_articles$X1 <- NULL
 exxon_articles$Date.X <- NULL
-ExxonArticle_2 <- exxon_articles # Renamed to match Tyler's file
-rm(exxon_articles)
+ExxonArticle_2 <- exxon_articles # Renamed to match co-author's file
+rm(exxon_articles) # no longer needed
 
 # Renames columns in the working df
 names(ExxonArticle_2) <- c("Date", "Article")
@@ -79,14 +98,14 @@ ExxonArticle_2 <- ExxonArticle_2 %>%
 
 ExxonArticle_Analysis <- ExxonArticle_2 %>%
   filter(Date >= "2020-03-01" & Date <= "2020-06-20")
-rm(ExxonArticle_2)
+rm(ExxonArticle_2) # no longer needed
 
 # Calculates the polarity of each article
 Polarity <- polarity(ExxonArticle_Analysis$Article) 
 
 # Adds the polarity to the working df
 ExxonArticle_Analysis$Polarity <- Polarity$all$polarity
-rm(Polarity)
+rm(Polarity) # no longer needed
 
 # Aggregates the polarity by day since each day can have multiple articles & multiple polarities
 ExxonArticle_TotalPolarity <- ExxonArticle_Analysis %>%
@@ -101,23 +120,25 @@ anyNA(ExxonArticle_TotalPolarity$Total_polarity)
 
 Exxon Financial Data
 ```{r}
-
 startDate = as.Date("2020-03-4")
 endDate = as.Date("2020-06-21")
+
 # DF is automatically saved as the ticker symbol
 getSymbols("XOM", from =startDate, to = endDate)
 
 # Extracts the price column as a numeric list from an xts object 
 XOM_Price <- as.numeric(XOM$XOM.Close)
+
 # Drops dates where no articles where recorded
 XOM_Price <- XOM_Price[-c(2,3,18,21,75)] 
 
 # Extracts the volume column as a numeric list from an xts object 
 XOM_Volume <- as.numeric(XOM$XOM.Volume)
+
 # Drops dates where no articles where recorded
 XOM_Volume <- XOM_Volume[-c(2,3,18,21,75)] 
 
-rm(XOM)
+rm(XOM) # no longer needed
 
 ```
 
@@ -125,7 +146,7 @@ Data Preparation for Models
 ```{r}
 # Combine the working df with price and volume lists 
 Exxon_Regression <- cbind(ExxonArticle_TotalPolarity, XOM_Price, XOM_Volume)
-rm(ExxonArticle_TotalPolarity, XOM_Price, XOM_Volume, ExxonArticle_Analysis)
+rm(ExxonArticle_TotalPolarity, XOM_Price, XOM_Volume, ExxonArticle_Analysis) # no longer needed
 
 # Raname columns 
 colnames(Exxon_Regression) <- c("Date", "Polarity", "Price", "Volume")
@@ -140,8 +161,6 @@ Exxon_Regression <- Exxon_Regression %>%
 # Create grouping variable 'Month' which is the recoreded month of each observation
 Exxon_Regression$Month <- factor(months(Exxon_Regression$Date), levels = month.name)
 
-#write.csv(Exxon_Regression, "E:/Projects/Sentiment Analysis/ExxonRegression.csv") # sending to Tyler
-
 cols <- c("Polarity" = "red", "Standardized Price" = "blue")
 ggplot(data = Exxon_Regression)+
   geom_line(mapping = aes(x = Date, y = Polarity, col = "Polarity"))+
@@ -155,7 +174,7 @@ ggplot(data = Exxon_Regression)+
 
 ```
 
-Regression -- Forecasting -- Function with different weightings
+Price Predicting Function With Different Weightings
 ```{r}
 
 predict_prices1 <- function(initial_price, initial_sentiment, sentiment_vector){
@@ -223,7 +242,7 @@ ggplot(data = Exxon_Regression)+
 
 ```
 
-Regression -- Forecasting -- Function with different weightings & volume 
+Price Predicting Function With Different Weightings & Volume 
 ```{r}
 
 predict_prices2 <- function(initial_price, initial_sentiment, initial_volume, sentiment_vector, volume_vector){
@@ -293,7 +312,7 @@ ggplot(data = Exxon_Regression)+
 
 ```
 
-Regression -- Forecasting -- Function with different weightings & volume (Confidence Interval)
+Price Predicting Function With Different Weightings & Volume (Confidence Interval)
 ```{r}
 
 create_confidence_intervals <- function(predicted_prices, confidence_level = 0.95){
@@ -323,7 +342,7 @@ create_confidence_intervals <- function(predicted_prices, confidence_level = 0.9
   return(df)
 }
 
-confidence_intervals <- create_confidence_intervals(Exxon_Regression$Predicted_Price_2) # 95%
+confidence_intervals <- create_confidence_intervals(Exxon_Regression$Predicted_Price_2) # 95% CI
 Exxon_Regression_Price_2 <- Exxon_Regression %>%
   select(c("Date", "Price", "Month", "Predicted_Price_2")) %>%
   mutate(ConfInt_lower=confidence_intervals$lower_limits, ConfInt_upper=confidence_intervals$upper_limits)
@@ -365,7 +384,7 @@ ggplot(data = Exxon_Regression_Price_2)+
 
 ```
 
-Regression -- Forecasting -- Price Difference
+Predicting Price Difference
 ```{r}
 
 Exxon_Regression_PriceDiff <- Exxon_Regression[2:nrow(Exxon_Regression), ] %>% 
@@ -390,8 +409,8 @@ calculate_darily_price_difference <- function(Prices){
   return(odf)
 }  
 
-#Actual_PriceDifferences <- calculate_darily_price_difference(Exxon_Regression$Price)
-#Exxon_Regression_PriceDiff <- cbind(Exxon_Regression_PriceDiff, Actual_PriceDifferences) 
+Actual_PriceDifferences <- calculate_darily_price_difference(Exxon_Regression$Price)
+Exxon_Regression_PriceDiff <- cbind(Exxon_Regression_PriceDiff, Actual_PriceDifferences) 
 
 cols <- c("Polarity" = "red", "Absolute Price Difference" = "blue")
 ggplot(data = Exxon_Regression_PriceDiff)+
@@ -471,11 +490,16 @@ ggplot(data = Exxon_Regression_PriceDiff) +
 
 ```
 
-Regression -- Forecasting -- Predicting Actual Price using Price Difference
+Predicting Actual Price using Price Difference
 ```{r}
 
 predict_prices3 <- function(initial_price, sentiment_vector, volume_vector, absolute_difference = FALSE){
-  
+  # This function takes an initial price, a list of sentiments (polarities) and volumes, and an optinal absolute difference parameter
+  # By default, the function determines the true  
+  # Price difference predictions are solely based on polarity and traded volume
+  # Predicted prices are determined recursively using the predicted price differences
+  # Returns a list of predicted prices
+ 
   Price_Diffs <- c()
   n <- 1 
   while(n <= length(sentiment_vector)){
@@ -520,11 +544,9 @@ predict_prices3 <- function(initial_price, sentiment_vector, volume_vector, abso
   
   print("Done")
   return(predicted_prices)
-
 }
 
 Predicted_Price_3 <- predict_prices3(41.86, Exxon_Regression_PriceDiff$Polarity, Exxon_Regression$Volume)
-
 Exxon_Regression_PriceDiff$Predicted_Price_3 <- Predicted_Price_3
 
 cols <- c("Predicted Price" = "red", "Actual Price" = "green")
@@ -538,6 +560,4 @@ ggplot(data = Exxon_Regression_PriceDiff)+
   xlab("Date")+
   ggtitle("Exxon Mobil Stock Price")
 
-
 ```
-
