@@ -1,0 +1,425 @@
+# Packages -----
+# Used for web scraping
+library(rvest) 
+
+# Used for character/string manipulation 
+library(stringr) 
+
+# Used for date manipulation
+library(lubridate)  
+
+# Used for text cleaning within articles 
+library(tm)
+library(tidytext)
+
+# Used for polarity calculations
+library(rJava)
+library(qdap)
+
+# Used for data manipulation & plotting 
+library(tidyverse)
+library(ggthemes)
+
+# Used to collect financial data 
+library(quantmod)
+library(tseries)
+
+# Used for linear programming solver
+library(lpSolve)
+
+# Custom Functions -----
+# Function for collecting articles hosted on MarketWatch.com 
+getArticles <- function(company, number_of_articles=50){
+  
+  # This function accepts a company name and an optinal number of articles as inputs
+  # The most recent 50 articles are collected by default 
+  # The function navigates to the page where all articles are hosted 
+  # Collects the links and posting time of the articles
+  # The function then uses the link for each article to collect the title and body of each article 
+  # Returns a data frame containing the date, a date-time object, url, title and body of the articles
+  
+  query_link <- paste("https://www.marketwatch.com/search?q=", company, "&m=Keyword&rpp=", toString(number_of_articles), "&mp=0&bd=false&rs=false", sep="")
+  
+  all_articles <- read_html(query_link)
+  
+  # Working with url characters 
+  print("Collecting the webpage urls...")
+  urls <- all_articles %>% 
+    html_nodes("div.searchresult a") %>% 
+    html_attr("href")
+  urls <- data.frame(urls)
+  urls <- data.frame(lapply(urls, as.character), stringsAsFactors = F)
+  # ensures that each url contains 'http://...'
+  urls$WebPg <- ifelse(!(str_starts(urls$urls, "http")),
+                       paste("http://www.marketwatch.com", urls$urls, sep=""),
+                       urls$urls)
+  
+  
+  # Working with time objects 
+  print("Collecting the article posting times...")
+  time_vector <- all_articles %>% 
+    html_nodes("div.deemphasized span") %>% 
+    html_text()
+  time_df <- as.data.frame(time_vector)
+  time_df$time <- as.character(time_df$time_vector)
+  time_df$time_vector <- NULL
+  
+  # dates on MarketWatch.com are in the form '4:44 p.m. Today'
+  # need to convert dates to a format that can be parsed and converted to a date/date-time object
+  problem_times <- str_detect(time_df$time, "Today")
+  keep_times <- !(problem_times)
+  time_df <- time_df[keep_times, ]
+  
+  time_df <- as.data.frame(time_df)
+  colnames(time_df) <- c("time")
+  
+  time_df$date_time <- ifelse(str_detect(time_df$time, "p.m."),
+                              str_replace(time_df$time, "p.m.", "PM"),
+                              str_replace(time_df$time, "a.m.","AM"))
+  
+  time_df$date_time <- ifelse(str_detect(time_df$time, "Sept"),
+                              str_remove(time_df$date_time, "t"),
+                              time_df$date_time)
+  
+  time_df$date_time <- as_datetime(time_df$date_time, format="%I:%M %p %b. %d, %Y")
+  time_df$date <- as.Date(time_df$date_time, format="%Y-%m-%d H:M:S")
+  
+  # Creating the df to collect each title and article from the webpages 
+  full_article_df <- data.frame(
+    Date = time_df$date,
+    Date_Time = time_df$date_time,
+    WebPg = urls$WebPg  
+  )
+  full_article_df$WebPg <- as.character(full_article_df$WebPg)
+  
+  titles <- c()
+  articles <- c()
+  current_number_of_articles <- 1
+  print("Collecting the articles...")
+  for (pg in full_article_df$WebPg){
+    # loops through each the df to collect the title and body for each article using the links collected
+    
+    current_webpage <- read_html(pg)
+    
+    current_title <- current_webpage %>% 
+      html_node("title") %>% 
+      html_text()
+    titles <- append(titles, current_title, after = length(titles))
+    
+    current_article <- current_webpage %>% 
+      html_nodes("p") %>% 
+      html_text()
+    body <- paste(current_article, collapse = " ")
+    articles <- append(articles, body, after = length(articles))
+    print("Collected " + as.String(current_number_of_articles) + "/" + as.String(number_of_articles) + " articles")
+    current_number_of_articles = current_number_of_articles + 1
+    #Sys.sleep(sample(seq(1, 12, by=0.01), size=1))
+  }
+  full_article_df$Title <- titles
+  full_article_df$Article <- articles
+  
+  full_article_df$Title <- str_remove_all(full_article_df$Title, "\n")
+  full_article_df$Article <- str_remove_all(full_article_df$Article, "\n")
+  
+  #print(full_article_df)
+  print("Done")
+  
+  return(full_article_df)
+}
+
+# Function to clean articles 
+cleanArticles <- function(text_vector){
+  
+  # This function accepts a text vector as input 
+  # Converts all text to lowercase, removes punctuation, removes stopwords, and removes unnecessary spaces
+  # Returns a vector of cleanned text
+  
+  print("Converting to lowercase text...")
+  text_vector <- tolower(text_vector)
+  
+  print("Removing punctuation...")
+  text_vector <- removePunctuation(text_vector)
+  
+  print("Removing stopwords...")
+  rm_mw_words <- c("marketwatch", "mw", "zachs", "zacks", "barron")
+  text_vector <- removeWords(text_vector, words = c(stopwords(kind="en"), rm_mw_words))
+  
+  print("Removing the whitespace within text...")
+  text_vector_cleaned <- stripWhitespace(text_vector)
+  
+  print("Done")
+  return(text_vector_cleaned)  
+}
+
+# Function to update dates on articles if they were posted after the market closed or on weekends
+updateDates <- function(df){
+  
+  # This function accepts a df as input
+  # It separates the date-time column into a date column and a time column
+  # If an article was posted after 4pm on a given day, then the date is updated to the next day
+  # If an article was posted on Saturday or Sunday, it is recorded as the following Monday
+  # The function returns a df 
+  
+  # Separating the date-time column and formatting appropriately
+  df <- df %>% 
+    separate(Date_Time, into=c("Date_Updated", "Time"), sep=" ")
+  df$Time <- str_remove_all(df$Time, ":")
+  df$Date_Updated <- parse_date(df$Date_Updated, format = "%Y-%m-%d")
+  
+  # Updating all dates 
+  print("Updating all dates...")
+  df$Date_Updated <- ifelse(as.numeric(df$Time >= 160000),
+                            as.Date(df$Date)+1,
+                            as.Date(df$Date))
+  df$Date_Updated <- as.Date(df$Date_Updated)
+  
+  # Determing the weekday the article was posted 
+  print("Determining weekdays...")
+  df$Day_of_week <- weekdays(df$Date_Updated)
+  
+  # Updating Saturdays and Sundays to Mondays
+  print("Updating weekends...")
+  df$Date_Updated <- ifelse(df$Day_of_week == "Saturday",
+                                        as.Date(df$Date_Updated)+2,
+                                        as.Date(df$Date_Updated))
+  df$Date_Updated <- ifelse(df$Day_of_week == "Sunday",
+                                        as.Date(df$Date_Updated)+1,
+                                        as.Date(df$Date_Updated))
+  
+  df$Date_Updated <- as.Date(df$Date_Updated)
+  df$Day_of_week <- weekdays(df$Date_Updated)
+  
+  print("Done")
+  
+  return(df)
+}
+
+# Function to calculate the returns on prices
+calculate_returns <- function(prices){
+  
+  # This function accepts a list of prices as input
+  # Returns = log(price_today) / log(price_yesterday)
+  
+  price_returns <- c()
+  print("Calculating returns...")
+  for(day_price in (2:length(prices))){
+    day_return <- log(prices[day_price])/log(prices[day_price - 1])
+    price_returns <- append(price_returns, day_return, after=length(price_returns))
+  }
+  print("Done")
+  return(price_returns)
+}
+
+# Function to predict prices using polarity and volume
+predictPrices_Volume <- function(initial_price, initial_sentiment, initial_volume, sentiment_vector, volume_vector){
+  
+  # This function takes an initial price, a list of sentiments (polarities), and a list of volumes
+  # where the first sentiment is the initial sentiment & first volume is initial volume 
+  # Positive news as a higher weighting than negative news 
+  # The function returns a list of predicted stock prices 
+  # Predictions are made based on the recursive relationship defined below 
+  
+  # Function is optimized using intermediate value theorem and the evaluation metric 
+  
+  stock_price <- c()
+  if (initial_sentiment < 0){
+    new_stock_price <- initial_price + (0.0118*initial_price*initial_sentiment) - (0.000000019*initial_volume*initial_sentiment)
+  }
+  else {
+    new_stock_price <- initial_price + (0.0079*initial_price*initial_sentiment) - (0.000000019*initial_volume*initial_sentiment)
+  }
+  stock_price <- append(stock_price, new_stock_price, after = length(stock_price))
+  for(i in 1:length(sentiment_vector)){
+    if(sentiment_vector[i] < 0){
+      new_stock_price <- stock_price[i] + (0.0118*stock_price[i]*sentiment_vector[i]) - (0.000000019*volume_vector[i]*sentiment_vector[i])
+      print("Predicting new stock prices...")
+    }
+    else{
+      new_stock_price <- stock_price[i] + (0.0079*stock_price[i]*sentiment_vector[i]) - (0.000000019*volume_vector[i]*sentiment_vector[i])
+      print("Predicting new stock prices...")
+    }
+    stock_price <- append(stock_price, new_stock_price, after = length(stock_price))
+  }
+  final_stock_prices <- c(initial_price, stock_price)
+  print("Done")
+  return(final_stock_prices)
+}
+
+# Function to calculate the daily price difference from a list of known prices
+calculate_daily_price_difference <- function(Prices){
+  
+  # This function takes a list of prices
+  # Returns a df containing price difference and abs price difference 
+  
+  row = 1
+  Price_Diffs = c()
+  while(row < length(Prices)){
+    price_diff <- round(Prices[row+1] - Prices[row], 3)
+    Price_Diffs <- append(Price_Diffs, price_diff, after = length(Price_Diffs))
+    row = row + 1
+    print("Calculating price differences...")
+  }
+  odf <- as.data.frame(Price_Diffs)
+  colnames(odf) <- c("True_Price_Difference")
+  odf$Abs_Price_Difference <- abs(odf$True_Price_Difference)
+  print("Done")
+  return(odf)
+} 
+
+# Function to predict price differences given polarity and volume 
+predict_price_differences <- function(sentiment_vector, volume_vector){
+  
+  # This function takes a list of sentiments (polarities) and volumes
+  # Returns a df containing predicted price differences and abs predicted price differences 
+  # Predictions are solely based on polarity and traded volume 
+  
+  Price_Diffs <- c()
+  n <- 1 
+  while(n <= length(sentiment_vector)){
+    price_diff <- round(0.00000035*volume_vector[n] - 1.5*sentiment_vector[n])
+    Price_Diffs <- append(Price_Diffs, price_diff, after = length(Price_Diffs))
+    n = n + 1
+    print("Predicting price differences...")
+  }
+  odf <- as.data.frame(Price_Diffs)
+  colnames(odf) <- c("Predicted_Price_Difference")
+  odf$Abs_Predicted_Price_Difference <- abs(odf$Predicted_Price_Difference)
+  print("Done")
+  return(odf)
+}
+
+# Article Data -----
+tsla_articles <- getArticles("tesla", 1000)
+tsla_articles$Title <- cleanArticles(tsla_articles$Title)
+tsla_articles$Article <- cleanArticles(tsla_articles$Article)
+tsla_articles <- updateDates(tsla_articles)
+
+# Financial Data -----
+startDate = as.Date("2020-09-7")
+endDate = as.Date("2020-11-21")
+
+# DF is automatically saved as the ticker symbol
+getSymbols("TSLA", from=startDate, to=endDate)
+
+# Analysis -----
+#------------------------------------------- TSLA data prep
+# Filtering the data for dates between the start and end dates
+tsla_articles <- tsla_articles %>%
+  filter(Date_Updated >= startDate) %>% 
+  filter(Date_Updated <= endDate) %>%
+  arrange(Date_Updated)
+
+# Calculating the polarities for the articles
+tsla_polarities <- polarity(tsla_articles$Article)
+tsla_articles$Polarity <- tsla_polarities$all$polarity
+
+# Aggregating the data by day to find total polarity
+tsla_polarities_df <- tsla_articles %>% 
+  group_by(Date_Updated) %>% 
+  summarise(total_polarity = sum(Polarity, na.rm = T)) %>% 
+  arrange(Date_Updated)
+
+# Dropping non-trading days fromt the df
+tsla_polarities_df <- tsla_polarities_df %>% 
+  filter(Date_Updated != '2020-09-07')
+
+# Extracting the closing price and volume from the xts stock object
+tsla_price <- as.numeric(TSLA$TSLA.Close)
+tsla_volume <- as.numeric(TSLA$TSLA.Volume)
+
+# Combining the polarity with the stock data
+tsla_analysis_df <- data.frame(cbind(tsla_polarities_df, tsla_price, tsla_volume))
+
+#------------------------------------------- Predicting TSLA stock price with sentiment and volume
+# negative article constant optimized at 0.0118
+# positive article constant optimized at 0.0079
+# volume constant optimized at 0.000000019
+tsla_analysis_df$predicted_price <- predictPrices_Volume(
+  initial_price = tsla_analysis_df$tsla_price[1],
+  initial_sentiment = tsla_analysis_df$total_polarity[1],
+  initial_volume = tsla_analysis_df$tsla_volume[1],
+  sentiment_vector = tsla_analysis_df$total_polarity[2:53],
+  volume_vector = tsla_analysis_df$tsla_volume[2:53]
+)
+
+tsla_model_difference <- tsla_analysis_df %>%
+  # The average deviation should be minimized for ideal model performance
+  select(c(tsla_price, predicted_price)) %>%
+  mutate(Difference = predicted_price - tsla_price, Absolute_Difference = abs(tsla_price - predicted_price)) %>%
+  summarize(Avg_Predicted_minus_Actual = mean(Difference), Avg_Absolute_Difference = mean(Absolute_Difference))
+tsla_model_difference # -15.11259, 62.74312
+
+cols <- c("Predicted Price" = "red", "Actual Price" = "green")
+ggplot(data = tsla_analysis_df)+
+  geom_line(mapping = aes(x = Date_Updated, y = tsla_price, col = "Actual Price"))+
+  geom_line(mapping = aes(x = Date_Updated, y = predicted_price, col = "Predicted Price"))+
+  scale_x_date(date_breaks = "months", date_labels = "%b-%Y")+
+  scale_color_manual(name = "Lines", values = cols) +
+  theme_tufte()+
+  ylab("Stock Price")+
+  xlab("Date")+
+  ggtitle("Tesla Stock Price")
+
+#------------------------------------------- Calculating and predicting the TSLA day-to-day price difference
+# sentiment constant optimized at 1.5
+# volume constant optimized at 0.00000035
+tsla_price_diffs <- calculate_daily_price_difference(tsla_analysis_df$tsla_price)
+
+tsla_predicted_price_diffs <- predict_price_differences(
+  tsla_analysis_df$total_polarity,
+  tsla_analysis_df$tsla_volume
+  )
+tsla_price_diffs$Predicted_Price_Difference <- tsla_predicted_price_diffs$Predicted_Price_Difference[1:53]
+tsla_price_diffs$Abs_Predicted_Price_Difference <- tsla_predicted_price_diffs$Abs_Predicted_Price_Difference[1:53]
+tsla_price_diffs$Date <- tsla_analysis_df$Date_Updated[2:54]
+
+tsla_price_difference_model_performance <- tsla_price_diffs %>% 
+  # The average deviation should be minimized for ideal model performance
+  select(c(Abs_Price_Difference, Abs_Predicted_Price_Difference)) %>% 
+  mutate(Deviation = Abs_Predicted_Price_Difference - Abs_Price_Difference) %>% 
+  summarise(Average_Deviation = mean(Deviation))
+tsla_price_difference_model_performance 
+
+cols <- c("Predicted Price Difference" = "red", "Actual Price Difference" = "green")
+ggplot(data = tsla_price_diffs)+
+  geom_line(mapping = aes(x = Date, y = Abs_Price_Difference, col = "Actual Price Difference"))+
+  geom_line(mapping = aes(x = Date, y = Abs_Predicted_Price_Difference, col = "Predicted Price Difference"))+
+  scale_x_date(date_breaks = "months", date_labels = "%b-%Y")+
+  scale_color_manual(name = "Lines", values = cols) +
+  theme_tufte()+
+  ylab("Stock Price Difference")+
+  xlab("Date")+
+  ggtitle("Tesla Day-to-Day (Absolute Value) Price Difference")
+
+cols <- c("Predicted Price Difference" = "red", "Actual Price Difference" = "green")
+ggplot(data = tsla_price_diffs)+
+  geom_line(mapping = aes(x = Date, y = True_Price_Difference, col = "Actual Price Difference"))+
+  geom_line(mapping = aes(x = Date, y = Predicted_Price_Difference, col = "Predicted Price Difference"))+
+  scale_x_date(date_breaks = "months", date_labels = "%b-%Y")+
+  scale_color_manual(name = "Lines", values = cols) +
+  theme_tufte()+
+  ylab("Stock Price Difference")+
+  xlab("Date")+
+  ggtitle("Tesla Day-to-Day Price Difference")
+
+#------------------------------------------- Granger Causality Analysis TSLA
+tsla_granger_analysis_df <- tsla_analysis_df[2:54, ] %>% 
+  select(Date_Updated, tsla_price, predicted_price)
+
+tsla_returns_actual <- calculate_returns(tsla_analysis_df$tsla_price)
+tsla_returns_predicted <- calculate_returns(tsla_analysis_df$predicted_price)
+tsla_granger_analysis_df$returns_actual <- tsla_returns_actual
+tsla_granger_analysis_df$returns_predicted <- tsla_returns_predicted
+
+arima(tsla_granger_analysis_df$returns_actual, order=c(1, 0, 0))
+
+tsla_granger_analysis_df$returns_difference <- tsla_granger_analysis_df$returns_predicted - tsla_granger_analysis_df$returns_actual
+
+# TSLA F-test 
+# (SS Regression / k) / (SS Error / n-k-1)
+tsla_SSR <- sum((tsla_granger_analysis_df$predicted_price - mean(tsla_granger_analysis_df$tsla_price))^2)
+tsla_SSE <- sum((tsla_granger_analysis_df$tsla_price - tsla_granger_analysis_df$predicted_price)^2)
+tlsa_Fval <- (tsla_SSR/3)/(tsla_SSR/(54-3-1))
+# The p-value is < 0.00001
+
+
